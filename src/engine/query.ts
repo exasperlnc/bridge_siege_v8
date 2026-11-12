@@ -1,5 +1,5 @@
 // Read-only helpers for the UI: reachable spaces, ability targets.
-import { type GameState, type PosId, NCELLS, isCastle } from './types.ts';
+import { type GameState, type PosId, NCELLS, isCastle, isTower } from './types.ts';
 import {
   checkAttack, checkBuildTower, checkDestroyCastle, checkDestroyTile, checkDestroyTower, checkDropoff, checkPickup,
   checkStep, getUnit, unitAt, neighbors as neighborsFn, CELL_NB,
@@ -95,8 +95,11 @@ export function abilityTargets(s: GameState): AbilityTargets {
   if (u.type === 'builder') {
     for (const n of around) {
       if (!checkDestroyTile(s, c, n)) t.destroyTile.push(n);
-      if (!checkDestroyTower(s, c, n)) t.destroyTower.push(n);
+      const te = checkDestroyTower(s, c, n);
+      if (!te) t.destroyTower.push(n);
+      else if (isTower(s.cells[n]) && !t.why.destroyTower) t.why.destroyTower = te;
     }
+    if (a.firstDestroyed !== null && !a.extraDestroyUsed && a.extraLocked) t.why.destroyExtra = 'The extra tile must be destroyed before the builder moves again.';
     if (a.firstDestroyed !== null)
       for (const n of CELL_NB[a.firstDestroyed]) if (!checkDestroyTile(s, c, n, true)) t.destroyExtra.push(n);
     const bt = checkBuildTower(s, c);

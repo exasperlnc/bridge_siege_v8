@@ -2,7 +2,7 @@ import './style.css';
 import {
   type Action, type GameState, type Player, type PosId, type UnitType, EXTRA_DESTROY_AP, MAX_RECRUITS, MOVE,
   RECRUIT_COST, RETRAIN_COST, TOWER_AP, TOWER_DESTROY_AP, TOWER_TILES, UNIT_NAME, UNIT_TYPES, USE_COST,
-  abilityTargets, applyAction, applyActions, castleOf, getUnit, isCastle, newGame, other, reachable, underSiege,
+  abilityTargets, applyAction, available, applyActions, castleOf, getUnit, isCastle, newGame, other, reachable, underSiege,
   unitAt,
 } from '../engine/index.ts';
 import type { SeatInfo, ServerMsg } from '../engine/protocol.ts';
@@ -108,17 +108,14 @@ function onTap(px: number, py: number) {
   const { p, reach, targets } = getDerived();
 
   // passenger badges are tappable to select a carried unit
-  if (hit.kind === 'cell') {
-    const pid = renderer.passengerHit(s, px, py);
-    if (pid && getUnit(s, pid)?.owner === me) { focus(pid); return; }
-  }
+  const pid = renderer.passengerHit(px, py);
+  if (pid && getUnit(s, pid)?.owner === me && mode === 'move') { focus(pid); return; }
 
   if (mode !== 'move') {
     if (hit.kind === 'cell' && targets && currentTargets(targets).includes(hit.pos)) {
       const t = hit.pos;
-      if (mode === 'destroyTile') act([{ type: 'destroyTile', target: t }]);
+      if (mode === 'destroy') act([{ type: targets.destroyTower.includes(t) ? 'destroyTower' : 'destroyTile', target: t }]);
       else if (mode === 'destroyExtra') act([{ type: 'destroyExtra', target: t }]);
-      else if (mode === 'destroyTower') act([{ type: 'destroyTower', target: t }]);
       else if (mode === 'dropoff') act([{ type: 'dropoff', target: t }]);
       return;
     }
@@ -147,9 +144,8 @@ function focus(id: string | null) {
 
 function currentTargets(t: NonNullable<ReturnType<typeof getDerived>['targets']>): PosId[] {
   switch (mode) {
-    case 'destroyTile': return t.destroyTile;
+    case 'destroy': return [...t.destroyTile, ...t.destroyTower];
     case 'destroyExtra': return t.destroyExtra;
-    case 'destroyTower': return t.destroyTower;
     case 'dropoff': return t.dropoff;
     default: return [];
   }
@@ -226,7 +222,7 @@ function renderPanel() {
   const me = viewer();
   const myTurn = s.current === me;
   const live = canAct();
-  const ps = s.players[me];
+
   const html: string[] = [];
   const turnName = session?.kind === 'local' ? `${esc(s.players[s.current].name)}'s turn` : myTurn ? 'Your turn' : `${esc(s.players[s.current].name)}'s turn`;
   html.push(`<div class="turn"><h2>${dot(s.current)} ${turnName}</h2><div class="pips" title="${s.ap} AP left">${Array.from({ length: 8 }, (_, i) => `<span class="pip${i < s.ap ? ' full' : ''}"></span>`).join('')}</div></div>`);
@@ -245,10 +241,9 @@ function renderPanel() {
       if (!isActive) html.push(`<p class="hint">Move or use an ability to spend ${USE_COST} AP on this unit.${s.active ? ' This finalizes your current unit.' : ''}</p>`);
       const b: string[] = [];
       const mbtn = (m: Mode, label: string, enabled: boolean, cls = '') => b.push(`<button class="btn ${cls}${mode === m ? ' on' : ''}" data-mode="${m}" ${enabled ? '' : 'disabled'}>${label}</button>`);
-      if (fu.type === 'builder') {
-        mbtn('destroyTile', 'Destroy tile', targets.destroyTile.length > 0, 'warn');
-        if (a.ability === 'destroyTile') mbtn('destroyExtra', `Extra tile (${EXTRA_DESTROY_AP} AP)`, targets.destroyExtra.length > 0, 'warn');
-        mbtn('destroyTower', `Destroy tower (+${TOWER_DESTROY_AP} AP)`, targets.destroyTower.length > 0, 'warn');
+      if (fu.type === 'builder' && !fu.carriedBy) {
+        if (a.ability === 'destroyTile') mbtn('destroyExtra', `Destroy extra tile (+${EXTRA_DESTROY_AP} AP)`, targets.destroyExtra.length > 0, 'warn');
+        else mbtn('destroy', `Destroy tile / tower (tower +${TOWER_DESTROY_AP} AP)`, targets.destroyTile.length + targets.destroyTower.length > 0, 'warn');
         b.push(`<button class="btn" data-act="buildTower" ${targets.buildTower ? '' : 'disabled'} title="${esc(targets.why.buildTower ?? '')}">Build tower (+${TOWER_AP} AP, ${TOWER_TILES} tiles)</button>`);
         if (targets.destroyCastle) b.push(`<button class="btn danger" data-act="destroyCastle">Storm the castle!</button>`);
       }
@@ -256,13 +251,19 @@ function renderPanel() {
         const pu = getUnit(s, pid)!;
         b.push(`<button class="btn" data-pickup="${pid}">Pick up ${fu.type === 'mount' ? UNIT_NAME[pu.type] : '(board mount)'}</button>`);
       }
-      if (fu.carrying || fu.carriedBy) mbtn('dropoff', 'Drop off', targets.dropoff.length > 0);
+      if (fu.carrying || fu.carriedBy) mbtn('dropoff', fu.carriedBy ? 'Dismount (uses ability)' : 'Drop off passenger', targets.dropoff.length > 0);
       if (b.length) html.push(`<div class="btns">${b.join('')}</div>`);
+      for (const w of [targets.why.destroyTower, targets.why.destroyExtra]) if (w && mode === 'move') html.push(`<p class="hint">${esc(w)}</p>`);
+      if (fu.carriedBy && mode === 'move') html.push('<p class="hint">Dismounting uses this unit\'s ability; it can still move afterward.</p>');
       if (mode !== 'move') html.push('<p class="hint">Tap a highlighted tile. Tap elsewhere to cancel.</p>');
       else if (fu.type === 'seeker' && targets.attack.length) html.push('<p class="hint">Tap a red-ringed enemy to attack.</p>');
       if (fu.type === 'builder' && mode === 'move') html.push('<p class="hint">Yellow tiles build new bridge (1 tile each).</p>');
     } else if (live && mine && p.err) {
       html.push(`<p class="hint">${esc(p.err)}</p>`);
+    }
+    const passenger = fu.carrying ? getUnit(s, fu.carrying) : null;
+    if (live && mine && passenger && (!s.used.includes(passenger.id) || s.active?.unitId === passenger.id)) {
+      html.push(`<div class="btns"><button class="btn" data-focus="${passenger.id}">Use the ${UNIT_NAME[passenger.type]} (passenger)</button></div>`);
     }
     if (live && mine && isActive) {
       html.push(`<div class="btns"><button class="btn" data-act="undo">Undo</button><button class="btn primary" data-act="finish">Done with unit</button></div>`);
@@ -270,7 +271,7 @@ function renderPanel() {
     // retrain
     if (live && mine && fu.pos === castleOf(me) && !fu.carriedBy && !fu.carrying && !isActive) {
       const opts = UNIT_TYPES.filter((t) => t !== fu.type).map((t) =>
-        `<button class="btn small" data-retrain="${t}" ${ps.pool[t] > 0 && s.ap >= RETRAIN_COST ? '' : 'disabled'}>${UNIT_NAME[t]} (${ps.pool[t]})</button>`).join('');
+        `<button class="btn small" data-retrain="${t}" ${available(s, me, t) > 0 && s.ap >= RETRAIN_COST ? '' : 'disabled'}>${UNIT_NAME[t]} (${available(s, me, t)})</button>`).join('');
       html.push(`<p class="section-title">Retrain (${RETRAIN_COST} AP)</p><div class="btns">${opts}</div>`);
     }
     html.push('</div>');
@@ -286,7 +287,7 @@ function renderPanel() {
       <div class="row"><div class="stepper"><button class="btn small" data-mine="-1" ${live ? '' : 'disabled'}>−</button><span>${mineCount}</span><button class="btn small" data-mine="1" ${live ? '' : 'disabled'}>+</button></div>
       <button class="btn" style="flex:1" data-act="mine" ${live && !sieged && s.ap >= mineCount ? '' : 'disabled'}>Mine ${mineCount} tile${mineCount > 1 ? 's' : ''} (${mineCount} AP)</button></div>
       <p class="section-title">Recruit (${RECRUIT_COST} AP · ${MAX_RECRUITS - cur.recruitsUsed} left)</p>
-      <div class="btns">${UNIT_TYPES.map((t: UnitType) => `<button class="btn small" data-recruit="${t}" ${live && !sieged && s.ap >= RECRUIT_COST && cur.pool[t] > 0 && cur.recruitsUsed < MAX_RECRUITS ? '' : 'disabled'}>${UNIT_NAME[t]} (${cur.pool[t]})</button>`).join('')}</div>
+      <div class="btns">${UNIT_TYPES.map((t: UnitType) => `<button class="btn small" data-recruit="${t}" ${live && !sieged && s.ap >= RECRUIT_COST && available(s, s.current, t) > 0 && cur.recruitsUsed < MAX_RECRUITS ? '' : 'disabled'}>${UNIT_NAME[t]} (${available(s, s.current, t)})</button>`).join('')}</div>
       </div>`);
     html.push(`<div class="btns endturn"><button class="btn primary big" data-act="endTurn" ${live ? '' : 'disabled'}>End turn</button></div>`);
   } else {
@@ -305,6 +306,7 @@ $('panel').addEventListener('click', (e) => {
   const d = el.dataset;
   if (d.mode) { mode = mode === d.mode ? 'move' : (d.mode as Mode); return render(); }
   if (d.mine) { mineCount += Number(d.mine); return render(); }
+  if (d.focus) return focus(d.focus);
   if (d.pickup) return act([{ type: 'pickup', partnerId: d.pickup }]);
   if (d.recruit) return act([{ type: 'recruit', unitType: d.recruit as UnitType }]);
   if (d.retrain && focusId) return act([{ type: 'retrain', unitId: focusId, unitType: d.retrain as UnitType }]);

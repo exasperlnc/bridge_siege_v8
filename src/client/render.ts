@@ -12,7 +12,7 @@ export const COLORS: Record<Player, { main: string; dark: string; light: string;
 const STRIP = 1.5; // castle strip height in cells
 const ROWS = H + STRIP * 2;
 
-export type Mode = 'move' | 'destroyTile' | 'destroyExtra' | 'destroyTower' | 'dropoff';
+export type Mode = 'move' | 'destroy' | 'destroyExtra' | 'dropoff';
 
 export interface View {
   state: GameState;
@@ -35,6 +35,7 @@ export class BoardRenderer {
   private ctx: CanvasRenderingContext2D;
   cs = 32;
   private tokens: Token[] = [];
+  private badges: Token[] = [];
   private flip = false;
 
   constructor(private canvas: HTMLCanvasElement) {
@@ -81,6 +82,7 @@ export class BoardRenderer {
     const s = v.state;
     this.flip = v.viewer === 1;
     this.tokens = [];
+    this.badges = [];
     const bw = W * cs, bh = H * cs;
     ctx.clearRect(0, 0, bw, ROWS * cs);
 
@@ -140,7 +142,8 @@ export class BoardRenderer {
     // units on board
     for (const u of s.units) if (!isCastle(u.pos) && !u.carriedBy) {
       const [rx, ry] = this.cellRect(u.pos);
-      this.drawUnit(s, u, rx + cs / 2, ry + cs / 2, cs * 0.36, v);
+      // smaller token on towers so the tower's battlements show around it
+      this.drawUnit(s, u, rx + cs / 2, ry + cs / 2, cs * (isTower(s.cells[u.pos]) ? 0.27 : 0.36), v);
     }
   }
 
@@ -148,44 +151,46 @@ export class BoardRenderer {
     const { ctx, cs } = this;
     const [x, y] = this.cellRect(i);
     const v = s.cells[i];
-    ctx.fillStyle = '#9a6a3a';
+    // Every tile is its own plank square with a dark seam, so chains stay countable.
+    const g = Math.max(1.5, cs * 0.06);
+    ctx.fillStyle = '#24160a';
     ctx.fillRect(x, y, cs, cs);
-    // planks
-    ctx.strokeStyle = 'rgba(60,35,15,0.55)';
+    ctx.fillStyle = '#a8743f';
+    ctx.fillRect(x + g, y + g, cs - 2 * g, cs - 2 * g);
+    ctx.fillStyle = 'rgba(255,240,210,0.16)';
+    ctx.fillRect(x + g, y + g, cs - 2 * g, Math.max(1, cs * 0.04));
+    ctx.strokeStyle = 'rgba(70,40,15,0.45)';
     ctx.lineWidth = 1;
     ctx.beginPath();
-    const vertical = false;
-    for (let k = 1; k < 4; k++) {
-      const o = Math.round((k * cs) / 4) + 0.5;
-      if (vertical) { ctx.moveTo(x + o, y); ctx.lineTo(x + o, y + cs); } else { ctx.moveTo(x, y + o); ctx.lineTo(x + cs, y + o); }
+    for (let k = 1; k < 3; k++) {
+      const o = Math.round(y + g + (k * (cs - 2 * g)) / 3) + 0.5;
+      ctx.moveTo(x + g, o); ctx.lineTo(x + cs - g, o);
     }
     ctx.stroke();
-    // dark edge where the neighbor is open ground
-    ctx.fillStyle = 'rgba(30,15,5,0.7)';
-    const e = Math.max(2, cs * 0.07);
-    const sx = cellX(i), sy = cellY(i);
-    const open = (nx: number, ny: number) => nx < 0 || ny < 0 || nx >= W || ny >= H || s.cells[cellAt(nx, ny)] === EMPTY;
-    // screen-space directions
-    const dU = this.flip ? [0, 1] : [0, -1], dD = this.flip ? [0, -1] : [0, 1];
-    const dL = this.flip ? [1, 0] : [-1, 0], dR = this.flip ? [-1, 0] : [1, 0];
-    if (open(sx + dU[0], sy + dU[1])) ctx.fillRect(x, y, cs, e);
-    if (open(sx + dD[0], sy + dD[1])) ctx.fillRect(x, y + cs - e, cs, e);
-    if (open(sx + dL[0], sy + dL[1])) ctx.fillRect(x, y, e, cs);
-    if (open(sx + dR[0], sy + dR[1])) ctx.fillRect(x + cs - e, y, e, cs);
 
     if (isTower(v)) {
       const o = towerOwner(v);
-      const m = cs * 0.1;
-      ctx.fillStyle = '#6b7280';
-      ctx.fillRect(x + m, y + m, cs - 2 * m, cs - 2 * m);
-      ctx.fillStyle = '#9ca3af';
-      const n = 4, bwid = (cs - 2 * m) / (n * 2 - 1);
-      for (let k = 0; k < n; k++) ctx.fillRect(x + m + k * 2 * bwid, y + m, bwid, cs * 0.12);
+      const m = g + cs * 0.02;
+      const inner = cs - 2 * m;
+      // raised light-stone block with a drop shadow so it reads as "taller" than bridges
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillRect(x + m + 2, y + m + 2, inner, inner);
+      ctx.fillStyle = '#d4dae2';
+      ctx.fillRect(x + m, y + m, inner, inner);
+      ctx.fillStyle = '#9aa4b2';
+      ctx.fillRect(x + cs * 0.26, y + cs * 0.26, cs * 0.48, cs * 0.48);
+      ctx.strokeStyle = '#0b1220';
+      ctx.lineWidth = 2.5;
+      ctx.strokeRect(x + m + 1.25, y + m + 1.25, inner - 2.5, inner - 2.5);
+      // owner-colored corner battlements stay visible around a unit standing on the tower
+      const b = cs * 0.24;
       ctx.fillStyle = COLORS[o].main;
-      ctx.fillRect(x + cs * 0.3, y + cs * 0.38, cs * 0.4, cs * 0.4);
-      ctx.strokeStyle = '#111827';
       ctx.lineWidth = 1.5;
-      ctx.strokeRect(x + m, y + m, cs - 2 * m, cs - 2 * m);
+      for (const [cx, cy] of [[x + m, y + m], [x + cs - m - b, y + m], [x + m, y + cs - m - b], [x + cs - m - b, y + cs - m - b]]) {
+        ctx.fillRect(cx, cy, b, b);
+        ctx.strokeStyle = '#0b1220';
+        ctx.strokeRect(cx + 0.75, cy + 0.75, b - 1.5, b - 1.5);
+      }
     }
   }
 
@@ -324,32 +329,30 @@ export class BoardRenderer {
       ctx.lineWidth = 2.5;
       ctx.beginPath(); ctx.arc(cx, cy, r + 4, 0, Math.PI * 2); ctx.stroke();
     }
+    ctx.globalAlpha = 1;
     if (u.carrying) {
       const p = s.units.find((o) => o.id === u.carrying);
       if (p) {
-        const pr = r * 0.55, px = cx + r * 0.75, py = cy - r * 0.75;
+        const pr = Math.max(7, r * 0.6), px = cx + r * 0.75, py = cy - r * 0.75;
+        ctx.globalAlpha = s.current === p.owner && s.used.includes(p.id) && s.active?.unitId !== p.id ? 0.55 : 1;
         ctx.fillStyle = COLORS[p.owner].light;
         ctx.strokeStyle = COLORS[p.owner].dark;
         ctx.lineWidth = 1.5;
         ctx.beginPath(); ctx.arc(px, py, pr, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
         drawIcon(ctx, p.type, px, py, pr * 0.6, COLORS[p.owner].dark);
         if (v.focusId === p.id) {
-          ctx.strokeStyle = '#facc15'; ctx.lineWidth = 2;
+          ctx.strokeStyle = '#facc15'; ctx.lineWidth = 2.5;
           ctx.beginPath(); ctx.arc(px, py, pr + 3, 0, Math.PI * 2); ctx.stroke();
         }
+        ctx.globalAlpha = 1;
+        this.badges.push({ id: p.id, x: px, y: py, r: pr });
       }
     }
-    ctx.globalAlpha = 1;
   }
 
-  /** Screen position of a carried unit's badge, for hit testing passengers. */
-  passengerHit(s: GameState, px: number, py: number): string | null {
-    const cs = this.cs;
-    for (const u of s.units) if (u.carrying && !isCastle(u.pos)) {
-      const [x, y] = this.cellRect(u.pos);
-      const r = cs * 0.36, bx = x + cs / 2 + r * 0.75, by = y + cs / 2 - r * 0.75;
-      if ((px - bx) ** 2 + (py - by) ** 2 <= (r * 0.55 + 2) ** 2) return u.carrying;
-    }
+  /** The carried unit whose badge is under the pointer, if any (board or castle). */
+  passengerHit(px: number, py: number): string | null {
+    for (const b of this.badges) if ((px - b.x) ** 2 + (py - b.y) ** 2 <= (b.r + 4) ** 2) return b.id;
     return null;
   }
 }

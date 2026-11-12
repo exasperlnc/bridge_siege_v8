@@ -1,6 +1,17 @@
 {
   "version": "0.0.1",
   "configurations": [
-    { "name": "game", "runtimeExecutable": "npx", "runtimeArgs": ["tsx", "server/server.ts"], "port": 8787 }
+    {
+      "name": "game",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "tsx",
+        "server/server.ts"
+      ],
+      "port": 8790,
+      "env": {
+        "PORT": "8790"
+      }
+    }
   ]
 }

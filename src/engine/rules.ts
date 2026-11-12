@@ -1,7 +1,7 @@
 // Pure, deterministic rules engine. applyAction never mutates its input.
 import {
   type Action, type ActiveUse, type GameState, type Player, type PosId, type Result, type Unit, type UnitType,
-  AP_PER_TURN, BRIDGE, EMPTY, EXTRA_DESTROY_AP, GATE_COLS, H, MAX_RECRUITS, MOVE, NCELLS, RECRUIT_COST,
+  AP_PER_TURN, BRIDGE, FIRST_TURN_AP, EMPTY, EXTRA_DESTROY_AP, GATE_COLS, H, MAX_RECRUITS, MOVE, NCELLS, RECRUIT_COST,
   RETRAIN_COST, SIEGE_ROWS, START, START_STOCKPILE, TOTAL, TOWER_AP, TOWER_DESTROY_AP, TOWER_TILES, UNIT_TYPES,
   USE_COST, W, castleOf, castleOwner, cellAt, cellY, isCastle, isTower, other, towerValue,
 } from './types.ts';
@@ -74,6 +74,11 @@ export function inPlayCount(s: GameState, p: Player, t: UnitType) {
   return s.units.filter((u) => u.owner === p && u.type === t).length;
 }
 
+/** Pieces of a type that can still be recruited or retrained into: destroyed pieces become available again. */
+export function available(s: GameState, p: Player, t: UnitType) {
+  return TOTAL[t] - inPlayCount(s, p, t);
+}
+
 export const UNIT_NAME: Record<UnitType, string> = { builder: 'Builder', seeker: 'Seeker', defender: 'Defender', mount: 'Mount' };
 
 // ---------- setup ----------
@@ -86,11 +91,10 @@ export function newGame(names: [string, string] = ['Player 1', 'Player 2'], firs
       name: names[p],
       stockpile: START_STOCKPILE,
       recruitsUsed: 0,
-      pool: Object.fromEntries(UNIT_TYPES.map((t) => [t, TOTAL[t] - START[t]])) as Record<UnitType, number>,
       lost: Object.fromEntries(UNIT_TYPES.map((t) => [t, 0])) as Record<UnitType, number>,
     })) as GameState['players'],
     current: first,
-    ap: AP_PER_TURN,
+    ap: FIRST_TURN_AP,
     turn: 1,
     used: [],
     active: null,
@@ -230,6 +234,7 @@ export function checkDestroyTile(s: GameState, c: Ctx, target: PosId, extra = fa
   if (extra) {
     if (a.ability !== 'destroyTile' || a.firstDestroyed === null) return 'Destroy a tile first.';
     if (a.extraDestroyUsed) return 'Only one extra tile can be destroyed per turn.';
+    if (a.extraLocked) return 'The extra tile must be destroyed before the builder moves again.';
     if (s.ap < EXTRA_DESTROY_AP) return `An extra tile costs ${EXTRA_DESTROY_AP} AP.`;
     if (!CELL_NB[a.firstDestroyed].includes(target)) return 'The extra tile must be adjacent to the first destroyed tile.';
   } else {
@@ -368,7 +373,7 @@ function apply(s: GameState, a: Action): string | null {
       snapshot(s);
       s.ap -= USE_COST;
       s.used.push(u.id);
-      s.active = { unitId: u.id, movementLeft: MOVE[u.type], abilityUsed: false, ability: null, firstDestroyed: null, extraDestroyUsed: false };
+      s.active = { unitId: u.id, movementLeft: MOVE[u.type], abilityUsed: false, ability: null, firstDestroyed: null, extraDestroyUsed: false, extraLocked: false };
       return null;
     }
     case 'move': {
@@ -389,6 +394,7 @@ function apply(s: GameState, a: Action): string | null {
         if (u.carrying) { const p = getUnit(s, u.carrying); if (p) p.pos = next; }
         act.movementLeft--;
       }
+      if (act.firstDestroyed !== null) act.extraLocked = true;
       log(s, `${UNIT_NAME[u.type]} moved ${a.path.length}${built ? `, building ${built} tile${built > 1 ? 's' : ''}` : ''}.`);
       return null;
     }
@@ -519,8 +525,7 @@ function apply(s: GameState, a: Action): string | null {
       if (underSiege(s, me)) return "You can't recruit while under siege.";
       if (s.ap < RECRUIT_COST) return `Recruiting costs ${RECRUIT_COST} AP.`;
       if (ps.recruitsUsed >= MAX_RECRUITS) return `You've used all ${MAX_RECRUITS} recruits.`;
-      if (ps.pool[a.unitType] <= 0) return `No ${UNIT_NAME[a.unitType]} pieces left to recruit.`;
-      ps.pool[a.unitType]--;
+      if (available(s, me, a.unitType) <= 0) return `All your ${UNIT_NAME[a.unitType]} pieces are already in play.`;
       ps.recruitsUsed++;
       s.ap -= RECRUIT_COST;
       addUnit(s, me, a.unitType);
@@ -535,10 +540,8 @@ function apply(s: GameState, a: Action): string | null {
       if (!UNIT_TYPES.includes(a.unitType)) return 'Unknown unit type.';
       if (u.pos !== castleOf(me) || u.carriedBy || u.carrying) return 'Only units inside your castle can be retrained.';
       if (u.type === a.unitType) return 'Pick a different unit type.';
-      if (ps.pool[a.unitType] <= 0) return `No spare ${UNIT_NAME[a.unitType]} pieces.`;
+      if (available(s, me, a.unitType) <= 0) return `All your ${UNIT_NAME[a.unitType]} pieces are already in play.`;
       if (s.ap < RETRAIN_COST) return `Retraining costs ${RETRAIN_COST} AP.`;
-      ps.pool[u.type]++;
-      ps.pool[a.unitType]--;
       log(s, `Retrained a ${UNIT_NAME[u.type]} as a ${UNIT_NAME[a.unitType]}.`);
       u.type = a.unitType;
       s.ap -= RETRAIN_COST;

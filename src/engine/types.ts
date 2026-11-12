@@ -30,6 +30,8 @@ export const TOTAL: Record<UnitType, number> = { builder: 6, seeker: 3, defender
 export const START: Record<UnitType, number> = { builder: 2, seeker: 1, defender: 1, mount: 1 };
 
 export const AP_PER_TURN = 8;
+/** The very first turn of the game (first player only) gets fewer AP. */
+export const FIRST_TURN_AP = 6;
 export const USE_COST = 2;
 export const RECRUIT_COST = 6;
 export const RETRAIN_COST = 4;
@@ -65,8 +67,6 @@ export interface PlayerState {
   name: string;
   stockpile: number;
   recruitsUsed: number;
-  /** Pieces still available in the recruitment pool. */
-  pool: Record<UnitType, number>;
   /** Pieces destroyed (out of play). */
   lost: Record<UnitType, number>;
 }
@@ -79,6 +79,8 @@ export interface ActiveUse {
   ability: AbilityName | null;
   firstDestroyed: PosId | null;
   extraDestroyUsed: boolean;
+  /** The builder moved after destroying, so it can no longer destroy an extra tile. */
+  extraLocked: boolean;
 }
 
 export type AbilityName =
